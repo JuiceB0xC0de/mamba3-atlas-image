@@ -70,7 +70,10 @@ STREAM_A_DATASET = "HuggingFaceFW/fineweb-edu"
 STREAM_A_CONFIG = "sample-10BT"
 STREAM_A_SPLIT = "train"
 
-PROMPT_DIR = "/Users/chiggy/atlasing/prompts"
+# Env override so the corpus can live wherever it is actually mounted (the
+# docker image bakes it at /opt/mamba3/prompts). The Mac path stays as the
+# fallback so existing local invocations keep working unchanged.
+PROMPT_DIR = os.environ.get("MAMBA3_PROMPT_DIR", "/Users/chiggy/atlasing/prompts")
 ARTIFACT_SCHEMA_VERSION = 3
 
 CONTRAST_PAIRS = {
