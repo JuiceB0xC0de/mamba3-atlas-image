@@ -50,5 +50,8 @@ jobs:
             ${{ env.IMAGE }}:latest
             ${{ env.IMAGE }}:${{ github.sha }}
             ${{ inputs.tag && format('{0}:{1}', env.IMAGE, inputs.tag) || '' }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # NOT type=gha: GitHub's Actions Cache is capped at 10 GB per repo and
+          # this image is ~8 GB, so mode=max thrashes, evicts, and adds ~10 min of
+          # layer export for no reuse. Docker Hub has no such cap.
+          cache-from: type=registry,ref=juiceboxdocks/mamba3-atlas:buildcache
+          cache-to: type=registry,ref=juiceboxdocks/mamba3-atlas:buildcache,mode=max
