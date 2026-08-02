@@ -124,5 +124,15 @@ assert n_dyn == 4, "T.dynamic MISSING -- the recompile storm will return"
 print("IMAGE GOOD")
 PYEOF
 
-WORKDIR /workspace
+# The pipeline itself. Baking it in is the point: a fresh pod becomes `docker run`
+# instead of tarballs, get-pip, and hunting for Python.h.
+COPY analysis/ /opt/mamba3/analysis/
+COPY prompts/ /opt/mamba3/prompts/
+
+# token_contract.py defaults PROMPT_DIR to a Mac path; override it here so the
+# image is self-contained and nothing has to be shipped to a pod separately.
+ENV MAMBA3_PROMPT_DIR=/opt/mamba3/prompts \
+    PYTHONPATH=/opt/mamba3/analysis
+
+WORKDIR /opt/mamba3
 CMD ["/bin/bash"]

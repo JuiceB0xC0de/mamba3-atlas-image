@@ -1,0 +1,200 @@
+{"text":"def is_prime(n):"}
+{"text":"return False"}
+{"text":"if n % i == 0:"}
+{"text":"def fibonacci(n):"}
+{"text":"return fibonacci(n - 1) +"}
+{"text":"return s[::"}
+{"text":"def __init__(self):"}
+{"text":"def push(self, item):"}
+{"text":"left, right = 0, len(arr) -"}
+{"text":"arr = np.array([[1, 2], [3, 4]])"}
+{"text":"async function fetchUser(id) {"}
+{"text":"const numbers = [1, 2, 3, 4, 5];"}
+{"text":"public class Calculator {"}
+{"text":"return a +"}
+{"text":"def factorial(n):"}
+{"text":"lines = f.read"}
+{"text":"x = torch.randn(3, 4)"}
+{"text":"def quicksort(arr):"}
+{"text":"return arr"}
+{"text":"counts.put(\"apple\","}
+{"text":"def matrix_multiply(a, b):"}
+{"text":"rows_b, cols_b = len(b), len(b["}
+{"text":"const data = fs.readFileSync('config.json', 'utf8');"}
+{"text":"def merge_sort(arr):"}
+{"text":"struct Point {"}
+{"text":"y: f64,"}
+{"text":"fn distance(&self, other: &Point) -> f64 {"}
+{"text":"def gcd(a, b):"}
+{"text":"a, b = b, a %"}
+{"text":"return s == s[::"}
+{"text":"for n in nums:"}
+{"text":"def count_vowels(s):"}
+{"text":"return sum(1 for c in s if c in"}
+{"text":"def celsius_to_fahrenheit(c):"}
+{"text":"def flatten(nested):"}
+{"text":"for sub in nested:"}
+{"text":"def fizzbuzz(n):"}
+{"text":"print("}
+{"text":"for i in range(len(arr)):"}
+{"text":"if arr[j] > arr[j +"}
+{"text":"if v == x:"}
+{"text":"words = text.split()"}
+{"text":"from collections import Counter"}
+{"text":"most_common = counts.most_common("}
+{"text":"return None"}
+{"text":"def to_upper(s):"}
+{"text":"def remove_duplicates(lst):"}
+{"text":"import json"}
+{"text":"import os"}
+{"text":"exists = os.path."}
+{"text":"with open(path) as f:"}
+{"text":"return [n ** 2 for n in"}
+{"text":"return [n for n in nums if n % 2 =="}
+{"text":"def __init__(self, name):"}
+{"text":"class Dog(Animal):"}
+{"text":"# inherits from"}
+{"text":"a, b = 0, 1"}
+{"text":"a, b = b, a +"}
+{"text":"result = 1"}
+{"text":"try:"}
+{"text":"except ValueError:"}
+{"text":"def average(nums):"}
+{"text":"# returns x plus"}
+{"text":"return [lst[i:i + size] for i in range(0, len(lst),"}
+{"text":"return sum(x * y for x, y in zip(a,"}
+{"text":"import re"}
+{"text":"arr.reduce((a, b) => a +"}
+{"text":"n % 2 ==="}
+{"text":"return `Hello, ${"}
+{"text":"n *"}
+{"text":"for (let i = 0; i < arr.length; i++) {"}
+{"text":"const keys = Object."}
+{"text":"resolve("}
+{"text":"const merged = { ...obj1, ..."}
+{"text":"document.querySelector('#btn').addEventListener('click', () => {"}
+{"text":"const nums = [3, 1, 2];"}
+{"text":"export default function App() {"}
+{"text":"// React hook"}
+{"text":"const upper = str.toUpperCase();"}
+{"text":"class Vehicle {"}
+{"text":"const result = condition ?"}
+{"text":"JSON.stringify("}
+{"text":"const filtered = items.filter(i => i.active).map(i => i."}
+{"text":"return a *"}
+{"text":"for (int i = 0; i < n; i++) {"}
+{"text":"public boolean isEmpty() {"}
+{"text":"String message = \"Hello\" +"}
+{"text":"int[] arr = {1, 2, 3};"}
+{"text":"int value;"}
+{"text":"// linked list"}
+{"text":"map.getOrDefault(key,"}
+{"text":"try {"}
+{"text":"} catch (ArithmeticException e) {"}
+{"text":"#include <stdio.h>"}
+{"text":"printf(\"Hello, World"}
+{"text":"return n * factorial(n -"}
+{"text":"char str[] = \"hello\";"}
+{"text":"int *ptr = &value;"}
+{"text":"void swap(int *a, int *b) {"}
+{"text":"*b ="}
+{"text":"v.push_back("}
+{"text":"// C++ output"}
+{"text":"struct Node *next;"}
+{"text":"if (malloc(size) == NULL) {"}
+{"text":"fn add(a: i32, b: i32) -> i32 {"}
+{"text":"let mut v: Vec<i32> = Vec::new();"}
+{"text":"println!(\"Hello,"}
+{"text":"1 => \"one\","}
+{"text":"let doubled: Vec<i32> = nums.iter().map(|n| n *"}
+{"text":"fn fmt(&self, f: &mut Formatter) -> fmt::"}
+{"text":"fn divide(a: f64, b: f64) -> Result<f64,"}
+{"text":"SELECT * FROM orders WHERE total >"}
+{"text":"INSERT INTO users (name, email) VALUES ("}
+{"text":"'electronics'"}
+{"text":"NOW("}
+{"text":"department"}
+{"text":"o.user_id"}
+{"text":"title TEXT NOT"}
+{"text":"active = 1"}
+{"text":"1000000 LIMIT"}
+{"text":"func add(a int, b int) int {"}
+{"text":"import \"fmt\""}
+{"text":"fmt.Println("}
+{"text":"s := []int{1, 2, 3}"}
+{"text":"log.Fatal("}
+{"text":"m[\"key\"] ="}
+{"text":"echo \"$f\""}
+{"text":"if [ -f \"$file\" ]; then"}
+{"text":"# count TODOs"}
+{"text":"script"}
+{"text":"new-branch"}
+{"text":"docker run -d -p 8080:80"}
+{"text":"ls -la | grep '^d'"}
+{"text":"import pandas as pd"}
+{"text":"df.head("}
+{"text":"mean = np.mean("}
+{"text":"X_train, X_test = train_test_split(X,"}
+{"text":"model.fit(X_train,"}
+{"text":"import matplotlib.pyplot as plt"}
+{"text":"loss = criterion(output,"}
+{"text":"optimizer.zero_grad()"}
+{"text":"optimizer."}
+{"text":"inputs)"}
+{"text":"4)"}
+{"text":"while True:"}
+{"text":"import sys"}
+{"text":"x = [i for i in range("}
+{"text":"raise ValueError("}
+{"text":"const x ="}
+{"text":"var z ="}
+{"text":"await "}
+{"text":"yield "}
+{"text":"np.array(["}
+{"text":"plt.figure("}
+{"text":"WHERE "}
+{"text":"GROUP BY "}
+{"text":"int "}
+{"text":"char "}
+{"text":"public "}
+{"text":"static "}
+{"text":"fn "}
+{"text":"match "}
+{"text":"pub "}
+{"text":"package "}
+{"text":"chan "}
+{"text":"grep "}
+{"text":"awk "}
+{"text":"#include <"}
+{"text":"template<"}
+{"text":"adj = {u: [] for u in nodes}"}
+{"text":"def dfs(node, seen):\n    seen.add(node)\n    for nb in adj[node]:"}
+{"text":"def union(a, b):\n    ra, rb = find(a), find(b)\n    if ra != rb:"}
+{"text":"memo = {}\ndef count_ways(n):\n    if n in memo: return memo[n]"}
+{"text":"trie = {}\nfor word in words:\n    node = trie"}
+{"text":"from collections import deque\nwindow = deque(maxlen=k)"}
+{"text":"def bisect_left(a, x):\n    lo, hi = 0, len(a)"}
+{"text":"data class User(val id: Int, val name: String)"}
+{"text":"fibs = 0 : 1 : zipWith (+) fibs (tail fibs)"}
+{"text":"local t = {}\ntable.insert(t, 1)"}
+{"text":"arr.map(&:upcase).select { |s| s.size > 3 }"}
+{"text":"var names = from u in users where u.Active select u.Name;"}
+{"text":"async with lock:\n    await fetch(url)"}
+{"text":"tokio::spawn(async move { fetch(url).await })"}
+{"text":"with threading.Lock():\n    shared += 1"}
+{"text":"defer resp.Body.Close()"}
+{"text":"result = match parse(s) {\n    Ok(n) => n,\n    Err(_) => 0,\n};"}
+{"text":"Option<int> = match vec.first() { Some(v) => v, None => -1 };"}
+{"text":"tokens = re.findall(r'\\b\\w+\\b', text.lower())"}
+{"text":"root = lxml.etree.fromstring(xml_bytes)"}
+{"text":"df.groupby('dept')['salary'].agg(['mean', 'max', 'count'])"}
+{"text":"scores = F.softmax(logits, dim=-1)"}
+{"text":"loss = F.cross_entropy(logits, labels)"}
+{"text":"WITH ranked AS (\n  SELECT *, ROW_NUMBER() OVER (PARTITION BY dept ORDER BY salary DESC) rn\n  FROM employees\n)\nSELECT * FROM ranked WHERE rn = 1"}
+{"text":"git rebase -i HEAD~3"}
+{"text":"docker compose up -d --build"}
+{"text":"find . -name '*.py' -newer marker -print0 | xargs -0 wc -l"}
+{"text":"tar -czf out.tgz dir/ && sha256sum out.tgz"}
+{"text":"def two_sum(nums, target):\n    seen = {}\n    for i, x in enumerate(nums):"}
+{"text":"def encode(s):\n    out = []; i = 0\n    while i < len(s):"}
+{"text":"def rand7_from_rand5():\n    while True:\n        v = (rand5()-1)*5 + rand5()"}
