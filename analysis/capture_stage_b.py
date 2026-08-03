@@ -700,6 +700,13 @@ class TokenGateRecorder:
         self._buf = {f: [[] for _ in range(n_layers)] for f in self.fields}
         # block identity, recorded once per batch (identical across layers)
         self._rows, self._lens = [], []
+        # Which packed forward each block belonged to. REQUIRED, not optional:
+        # _segmented_roles reduces interior means by differencing a float32
+        # cumulative sum taken across the WHOLE packed forward, so any attempt
+        # to reproduce the capture's own arithmetic needs the batch grouping.
+        # The first version of this schema omitted it, which left a real
+        # disagreement between the two artifacts undecidable (2026-08-03).
+        self._batch = []
         self._batches_seen = [0] * n_layers
         # one D2H per layer per packed forward, matching this file's sync
         # contract rather than adding a copy per field
@@ -734,11 +741,14 @@ class TokenGateRecorder:
         # block identity is layer-independent; record it on the first layer
         # position only, so the batch order is captured exactly once
         if lp == 0:
-            self._rows.append(np.asarray(bis, dtype=np.int64))
+            rows = np.asarray(bis, dtype=np.int64)
+            self._rows.append(rows)
             self._lens.append(
                 lengths.detach().cpu().numpy().astype(np.int64)
                 if hasattr(lengths, "detach") else
                 np.asarray(lengths, dtype=np.int64))
+            self._batch.append(
+                np.full(rows.shape, len(self._batch), dtype=np.int64))
         self._batches_seen[lp] += 1
 
     def payload(self):
@@ -768,6 +778,11 @@ class TokenGateRecorder:
                 f"{int(lens.sum())} but {n_tokens} token rows were buffered")
         out["token_block_row"] = rows          # block row id, emission order
         out["token_block_len"] = lens          # token count per block, same order
+        # packed-forward index per block. Blocks sharing a value were reduced
+        # together by one cumulative sum, which is what makes the capture's
+        # arithmetic reproducible from this artifact.
+        out["token_block_batch"] = (np.concatenate(self._batch)
+                                    if self._batch else np.zeros(0, np.int64))
         out["token_block_start"] = np.concatenate(
             ([0], np.cumsum(lens)[:-1])).astype(np.int64) if lens.size else lens
         out["token_fields"] = np.asarray(self.fields, dtype="<U32")

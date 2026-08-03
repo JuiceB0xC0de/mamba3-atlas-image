@@ -59,24 +59,79 @@ def fp16_ulp(x):
                       .astype(np.float16)).astype(np.float64)
 
 
-def rebuild_roles(tok, lens, n_blocks, rows):
-    """Per-token (T, L, H) -> (block, role, L, H) using the capture's own rule."""
+def infer_batches(lens, max_blocks, max_tokens):
+    """Replay plan_forward_packs for artifacts written before batch ids existed.
+
+    The packing rule is deterministic and stated in RUNBOOK-pod.md: greedily
+    group COMPLETE blocks by --forward-batch-size and --forward-max-tokens,
+    never splitting a block, in order. Emission order is that same order, so
+    the grouping is recoverable from the lengths alone -- no recapture needed.
+    """
+    batch = np.zeros(len(lens), np.int64)
+    b = nb = nt = 0
+    for i, n in enumerate(lens):
+        n = int(n)
+        if nb and (nb + 1 > max_blocks or (max_tokens and nt + n > max_tokens)):
+            b, nb, nt = b + 1, 0, 0
+        batch[i], nb, nt = b, nb + 1, nt + n
+    return batch
+
+
+def rebuild_roles(tok, lens, n_blocks, rows, batch=None, exact=True):
+    """Per-token (T, L, H) -> (block, role, L, H).
+
+    exact=True reproduces the CAPTURE'S ARITHMETIC, which is the only fair
+    comparison. _segmented_roles takes one float32 cumulative sum across the
+    entire packed forward and recovers each block's interior sum by
+    differencing two prefix values. When the interior sum is small and the
+    prefix is large those two values are nearly equal, so the difference keeps
+    few significant digits. Reproducing that requires the batch grouping --
+    per-block arithmetic, in any precision, gives a different answer.
+
+    exact=False takes a direct float64 mean per block. That is the more
+    accurate number, and the gap between the two is how much precision the
+    capture's reduction costs.
+    """
     L, H = tok.shape[1], tok.shape[2]
     out = np.zeros((n_blocks, len(ROLES), L, H), dtype=np.float64)
     counts = np.zeros((n_blocks, len(ROLES)), dtype=np.int64)
-    start = 0
-    for row, n in zip(rows, lens):
-        seg = tok[start:start + n].astype(np.float64)     # (n, L, H)
-        out[row, 0] = seg[0]                              # bos
-        counts[row, 0] = 1
-        if n > 1:
-            out[row, 2] = seg[n - 1]                      # final
-            counts[row, 2] = 1
-        n_int = max(n - 2, 0)
-        if n_int > 0:
-            out[row, 1] = seg[1:n - 1].mean(axis=0)       # interior
-        counts[row, 1] = n_int
-        start += n
+
+    if batch is None or not exact:
+        start = 0
+        for row, n in zip(rows, lens):
+            seg = tok[start:start + n].astype(np.float64)
+            out[row, 0] = seg[0]
+            counts[row, 0] = 1
+            if n > 1:
+                out[row, 2] = seg[n - 1]
+                counts[row, 2] = 1
+            n_int = max(n - 2, 0)
+            if n_int > 0:
+                out[row, 1] = seg[1:n - 1].mean(axis=0)
+            counts[row, 1] = n_int
+            start += n
+        return out, counts
+
+    starts = np.concatenate(([0], np.cumsum(lens)[:-1]))
+    for b in np.unique(batch):
+        sel = np.flatnonzero(batch == b)
+        lo, hi = starts[sel[0]], starts[sel[-1]] + lens[sel[-1]]
+        x = tok[lo:hi].astype(np.float32)                  # the packed forward
+        pre = np.concatenate(
+            [np.zeros((1, L, H), np.float32),
+             np.cumsum(x, axis=0, dtype=np.float32)], axis=0)
+        for i in sel:
+            off, n, row = starts[i] - lo, int(lens[i]), int(rows[i])
+            out[row, 0] = x[off]
+            counts[row, 0] = 1
+            if n > 1:
+                out[row, 2] = x[off + n - 1]
+                counts[row, 2] = 1
+            n_int = max(n - 2, 0)
+            if n_int > 0:
+                out[row, 1] = ((pre[off + n - 1] - pre[off + 1])
+                               / np.float32(n_int))
+            counts[row, 1] = n_int
     return out, counts
 
 
@@ -88,6 +143,11 @@ def main():
                     help="artifact written by --emit-token-gates")
     ap.add_argument("--fields", default=None,
                     help="comma list; default is every emitted field")
+    ap.add_argument("--forward-batch-size", type=int, default=600,
+                    help="only used for artifacts written before "
+                         "token_block_batch existed; must match the capture")
+    ap.add_argument("--forward-max-tokens", type=int, default=9000,
+                    help="ditto; 0 means no token cap")
     args = ap.parse_args()
 
     cap = np.load(args.capture, allow_pickle=False)
@@ -136,6 +196,24 @@ def main():
 
     # --- the reconstruction -------------------------------------------------
     failed = []
+    prec_cost = {}
+    if "token_block_batch" in tg:
+        batch = tg["token_block_batch"]
+        src = "recorded by the capture"
+    else:
+        batch = infer_batches(lens, args.forward_batch_size,
+                              args.forward_max_tokens)
+        src = (f"INFERRED by replaying the packing rule "
+               f"(batch<={args.forward_batch_size} blocks, "
+               f"<={args.forward_max_tokens} tokens)")
+    sizes = np.bincount(batch)
+    toks = np.bincount(batch, weights=lens).astype(np.int64)
+    print(f"\npacked forwards: {sizes.size}  [{src}]")
+    print(f"  blocks/batch {sizes.min()}-{sizes.max()}   "
+          f"tokens/batch {toks.min()}-{toks.max()}")
+    print("  cross-check these against forward_pack_realized in the capture "
+          "manifest;\n  if they disagree the grouping is wrong and the "
+          "interior comparison is void")
     print(f"\n{'field':>10} {'role':>10} {'max abs err':>12} {'max ULP':>9} "
           f"{'p99.9 ULP':>10} {'over budget':>12} {'verdict':>8}")
     for f in fields:
@@ -147,15 +225,21 @@ def main():
         if capkey not in cap:
             print(f"  {f}: no {capkey} in the capture, skipping")
             continue
-        rebuilt, counts = rebuild_roles(tg[key], lens, n_blocks, rows)
+        rebuilt, counts = rebuild_roles(tg[key], lens, n_blocks, rows,
+                                        batch=batch, exact=True)
+        ideal, _ = rebuild_roles(tg[key], lens, n_blocks, rows, exact=False)
         # capture layout is (block, layer, role, head); rebuilt is
         # (block, role, layer, head)
         ref = cap[capkey].astype(np.float64).transpose(0, 2, 1, 3)
         for ri, rname in enumerate(ROLES):
-            a, b = rebuilt[:, ri], ref[:, ri]
+            a, b, idl = rebuilt[:, ri], ref[:, ri], ideal[:, ri]
             if rname == "interior":
                 keep = counts[:, 1] > 0        # absent interior is 0 on both sides
-                a, b = a[keep], b[keep]
+                a, b, idl = a[keep], b[keep], idl[keep]
+                prec_cost.setdefault(f, {})[rname] = (
+                    np.abs(idl - a)
+                    / np.maximum(fp16_ulp(b),
+                                 np.finfo(np.float16).smallest_subnormal))
             aerr = np.abs(a - b)
             ulp = np.maximum(fp16_ulp(b), np.finfo(np.float16).smallest_subnormal)
             err_ulp = aerr / ulp
@@ -176,6 +260,22 @@ def main():
                     f"diff={aerr[bad]:.3e} = {err_ulp[bad]:.2f} float16 ULP "
                     f"(budget {ULP_TOL})  [{int(over.sum())} of {over.size} "
                     f"cells over budget]")
+
+    if prec_cost:
+        print(f"\n{'-' * 78}")
+        print("PRECISION COST OF THE CAPTURE'S OWN REDUCTION (interior only)")
+        print("float64 per-block mean vs the capture's float32 whole-batch")
+        print("cumsum differencing, in float16 ULP of the stored value:")
+        print(f"\n{'field':>10} {'max ULP':>10} {'p99.9 ULP':>11} "
+              f"{'median ULP':>12} {'cells >2 ULP':>13}")
+        for f, roles in prec_cost.items():
+            e = roles["interior"]
+            print(f"{f:>10} {e.max():>10.2f} {np.percentile(e, 99.9):>11.2f} "
+                  f"{np.median(e):>12.3f} {int((e > 2).sum()):>13,}")
+        print("\nThis is not a defect in either artifact. It is how much")
+        print("resolution the block summaries give up on small interior means,")
+        print("and it is the reason to prefer the per-token data when the")
+        print("quantity of interest is small -- e.g. near-integrator heads.")
 
     print()
     if failed:
