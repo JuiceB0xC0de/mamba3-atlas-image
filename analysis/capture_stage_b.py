@@ -652,6 +652,128 @@ def estimate_artifact_bytes(n_blocks, n_layers, n_heads, n_roles=len(POSITION_RO
             "n_roles": n_roles, "n_role_fields": len(BLOCK_ROLE_FIELDS)}
 
 
+# ---------------------------------------------------------------------------
+# Experiment 0b: per-token gate emission.
+#
+# Everything above reduces the per-token gate tensors to (block, layer, role,
+# head) means. That reduction destroys token ORDER, and order is what any
+# temporal quantity needs -- subjective time tau = sum(Delta), per-head clock
+# rate, and finite-time operator products all require knowing which Delta came
+# after which. No amount of downstream analysis recovers it.
+#
+# This path is ADDITIVE and OFF BY DEFAULT. Without --emit-token-gates no
+# recorder is constructed, the hook body never executes, and the primary
+# artifact is byte-identical to every capture already banked. That matters:
+# the existing captures came out of this code path, and a new run has to stay
+# comparable to them by construction rather than by argument.
+#
+# Only the PRIMITIVES are emitted. log_alpha = A * Delta is derived downstream
+# rather than stored, because the 2026-08-03 experiment-0a run showed that
+# float16 storage of log_alpha lands the near-integrator heads -- the most
+# interesting ones in the map -- in fp16 subnormal range where relative
+# precision collapses. Storing Delta and A in float32 and deriving makes that
+# a non-issue instead of a caveat.
+TOKEN_GATE_FIELDS = ("Delta", "lambda", "A")
+TOKEN_GATE_DTYPE = np.float32
+
+
+class TokenGateRecorder:
+    """Per-token gate values, unreduced: (token, layer, head) per field.
+
+    Buffers each packed forward's concatenated (T_batch, H) slice per layer and
+    concatenates once at the end. Block identity is preserved separately as row
+    ids and lengths in emission order, so a consumer can slice the token axis
+    back into sequences without any offset arithmetic here.
+
+    Sizing, for the 187M stream-b corpus (180,145 valid tokens, 24 heads):
+        7 layers  x 3 fields x float32  ->  ~363 MB
+        12 layers x 3 fields x float32  ->  ~622 MB
+    Comparable to the primary artifact and smaller than most, because gates are
+    scalars per head rather than states.
+    """
+
+    def __init__(self, n_layers, n_heads, fields=TOKEN_GATE_FIELDS):
+        self.n_layers, self.n_heads = n_layers, n_heads
+        self.fields = tuple(fields)
+        # per layer position -> list of (T_batch, H) float32 arrays, in the
+        # order batches were emitted
+        self._buf = {f: [[] for _ in range(n_layers)] for f in self.fields}
+        # block identity, recorded once per batch (identical across layers)
+        self._rows, self._lens = [], []
+        self._batches_seen = [0] * n_layers
+        # one D2H per layer per packed forward, matching this file's sync
+        # contract rather than adding a copy per field
+        self.d2h = 0
+
+    def put(self, lp, bis, lengths, tensors):
+        """One packed forward, one layer. ``tensors[f]`` is (T_batch, H)."""
+        shape = None
+        for f in self.fields:
+            t = tensors[f]
+            if t.shape[1] != self.n_heads:
+                raise ContractError(
+                    f"token-gate field {f!r} has {t.shape[1]} heads, "
+                    f"expected {self.n_heads}")
+            if shape is None:
+                shape = tuple(t.shape)
+            elif tuple(t.shape) != shape:
+                raise ContractError(
+                    f"token-gate field {f!r} has shape {tuple(t.shape)}, "
+                    f"expected {shape}; fields must share the token axis")
+        # ONE D2H for every field. This file's sync contract is "2 x
+        # selected_layers batched D2H copies per packed forward", and it exists
+        # because the design this replaced issued ~700 individual
+        # synchronizations per block. A .cpu() per field would have tripled the
+        # copy count; stacking on device and splitting after it lands keeps the
+        # added cost at one copy per layer per packed forward.
+        stacked = torch.stack([tensors[f] for f in self.fields], dim=0)
+        host = stacked.detach().float().cpu().numpy().astype(TOKEN_GATE_DTYPE)
+        self.d2h += 1
+        for i, f in enumerate(self.fields):
+            self._buf[f][lp].append(host[i])
+        # block identity is layer-independent; record it on the first layer
+        # position only, so the batch order is captured exactly once
+        if lp == 0:
+            self._rows.append(np.asarray(bis, dtype=np.int64))
+            self._lens.append(
+                lengths.detach().cpu().numpy().astype(np.int64)
+                if hasattr(lengths, "detach") else
+                np.asarray(lengths, dtype=np.int64))
+        self._batches_seen[lp] += 1
+
+    def payload(self):
+        """Assemble the emission artifact. Raises if layers disagree."""
+        if len(set(self._batches_seen)) != 1:
+            raise ContractError(
+                f"token-gate layers saw different batch counts: "
+                f"{self._batches_seen}; the token axis would not align")
+        out = {}
+        n_tokens = None
+        for f in self.fields:
+            per_layer = [np.concatenate(self._buf[f][lp], axis=0)
+                         for lp in range(self.n_layers)]
+            arr = np.stack(per_layer, axis=1)      # (T, L, H)
+            if n_tokens is None:
+                n_tokens = arr.shape[0]
+            elif arr.shape[0] != n_tokens:
+                raise ContractError(
+                    f"token-gate field {f!r} has {arr.shape[0]} tokens, "
+                    f"expected {n_tokens}")
+            out[f"token|{f}"] = arr
+        rows = np.concatenate(self._rows) if self._rows else np.zeros(0, np.int64)
+        lens = np.concatenate(self._lens) if self._lens else np.zeros(0, np.int64)
+        if int(lens.sum()) != int(n_tokens or 0):
+            raise ContractError(
+                f"token-gate length bookkeeping drifted: lengths sum to "
+                f"{int(lens.sum())} but {n_tokens} token rows were buffered")
+        out["token_block_row"] = rows          # block row id, emission order
+        out["token_block_len"] = lens          # token count per block, same order
+        out["token_block_start"] = np.concatenate(
+            ([0], np.cumsum(lens)[:-1])).astype(np.int64) if lens.size else lens
+        out["token_fields"] = np.asarray(self.fields, dtype="<U32")
+        return out
+
+
 class BlockRoleRecorder:
     """Preallocated (block, layer, role, head[, rank]) summaries. Bounded and known.
 
@@ -705,8 +827,20 @@ class BlockRoleRecorder:
         self._sc = {f: torch.zeros((n_layers, R3, n_heads), dtype=torch.float32,
                                    device=device) for f in BLOCK_COLLAPSED_FIELDS}
         self._sn = torch.zeros((n_layers, R3), dtype=torch.float32, device=device)
+        # Experiment 0b. None unless --emit-token-gates was passed; when None
+        # the hook in put_batch_layer is a single identity check.
+        self.token_gate = None
 
     def put_role(self, bi, lp, role_idx, scal, ph, lo, hi, extra=None):
+        # Experiment 0b hooks the BATCHED path (put_batch_layer), which is what
+        # production uses. If this per-block path is ever reached with token-gate
+        # emission requested, fail loudly: silently writing an empty artifact
+        # would look like a successful capture.
+        if self.token_gate is not None:
+            raise ContractError(
+                "--emit-token-gates is only wired into put_batch_layer; this "
+                "capture reached the per-block put_role path, which would emit "
+                "no token gates. Refusing to produce a silently empty artifact.")
         n = hi - lo
         self._sn[lp, role_idx] = float(n)
         if n <= 0:
@@ -821,6 +955,14 @@ class BlockRoleRecorder:
 
         def cat(group, field):
             return torch.cat([r[group][field] for r in records], dim=0).float()
+
+        # Experiment 0b: take the per-token gates BEFORE the reductions below
+        # collapse the token axis. Nothing here is recomputed -- these are the
+        # same tensors the reductions are about to consume.
+        if self.token_gate is not None:
+            self.token_gate.put(lp, bis, lengths,
+                                {f: cat("scal", f)
+                                 for f in self.token_gate.fields})
 
         a = {}
         counts = None
@@ -2800,6 +2942,13 @@ def main():
     ap.add_argument("--self-check", action="store_true",
                     help="offline synthetic fixture; no CUDA, model or network")
     ap.add_argument("--out", default="capture_stage_b.npz")
+    ap.add_argument("--emit-token-gates", default=None, metavar="PATH",
+                    help="Experiment 0b: also write per-token gate values "
+                         "(Delta, lambda, A as float32) to PATH as a SEPARATE "
+                         "artifact. The primary --out capture is unaffected. "
+                         "Omit for byte-identical behaviour to every banked "
+                         "capture. Roughly 363 MB at 7 layers / 24 heads / "
+                         "180k tokens.")
     args = ap.parse_args()
 
     if args.self_check:
@@ -2915,6 +3064,14 @@ def main():
         sys.exit(1)
     blockrole = BlockRoleRecorder(len(block_indices), len(sel), nheads,
                                   rank=rank, device=dev)
+    if args.emit_token_gates:
+        blockrole.token_gate = TokenGateRecorder(len(sel), nheads)
+        print(f"[0b] per-token gate emission ON -> {args.emit_token_gates}\n"
+              f"     fields {TOKEN_GATE_FIELDS} as "
+              f"{np.dtype(TOKEN_GATE_DTYPE).name}, shape (tokens, "
+              f"{len(sel)} layers, {nheads} heads)\n"
+              f"     this is a SEPARATE artifact; {args.out} is unaffected",
+              flush=True)
     recorder = BlockRecorder(BLOCK_QUANTITIES, len(sel), nheads, device=dev,
                              n_blocks=len(block_indices))
     layer_pos = {li: i for i, li in enumerate(sel)}
@@ -3716,6 +3873,53 @@ def main():
         time.perf_counter() - serialize_t0)
     atomic_write_json(args.out.replace(".npz", ".manifest.json"), manifest)
     print(f"\nwrote {args.out}  ({processed} blocks, {seen_tokens:,} tokens)")
+
+    # Experiment 0b, written AFTER the primary artifact so a failure here can
+    # never cost the capture that was just paid for.
+    if args.emit_token_gates and blockrole.token_gate is not None:
+        tg_t0 = time.perf_counter()
+        tg_payload = blockrole.token_gate.payload()
+        tg_bytes = sum(v.nbytes for v in tg_payload.values())
+        atomic_savez(args.emit_token_gates, **tg_payload)
+        tg_meta = {
+            "produced_by": "capture_stage_b.py --emit-token-gates",
+            "experiment": "0b -- per-token gate emission",
+            "primary_capture": args.out,
+            "primary_capture_is_unmodified": True,
+            "fields": list(TOKEN_GATE_FIELDS),
+            "dtype": str(np.dtype(TOKEN_GATE_DTYPE)),
+            "axes": "token|<field> is (token, layer, head)",
+            "layers": [int(x) for x in sel],
+            "n_heads": int(nheads),
+            "n_tokens": int(tg_payload["token_block_len"].sum()),
+            "blocks": int(tg_payload["token_block_row"].size),
+            "block_index": (
+                "token_block_row / token_block_len / token_block_start give the "
+                "block row id, token count and starting token index for each "
+                "block IN EMISSION ORDER. Emission order is packed-forward "
+                "order, NOT block row order -- sort by token_block_row if row "
+                "order is wanted."),
+            "log_alpha_note": (
+                "log_alpha is NOT stored. Derive it as A * Delta in float64. "
+                "It was deliberately left out because float16 storage of "
+                "log_alpha puts near-integrator heads in fp16 subnormal range "
+                "(see experiment 0a, 2026-08-03)."),
+            "bytes": int(tg_bytes),
+            "d2h_copies": int(blockrole.token_gate.d2h),
+            "d2h_policy": (
+                "one batched D2H per selected layer per packed forward; all "
+                "fields are stacked on device and split after landing, so the "
+                "emission adds one copy per layer per forward rather than one "
+                "per field"),
+            "serialize_seconds": float(time.perf_counter() - tg_t0),
+            "gpu_parity_validated": False,
+            "evidence_status": ["source_derived"],
+        }
+        atomic_write_json(
+            args.emit_token_gates.replace(".npz", ".manifest.json"), tg_meta)
+        print(f"wrote {args.emit_token_gates}  "
+              f"({tg_meta['n_tokens']:,} tokens x {len(sel)} layers x "
+              f"{nheads} heads, {tg_bytes / (1 << 20):.0f} MiB)")
 
 
 if __name__ == "__main__":

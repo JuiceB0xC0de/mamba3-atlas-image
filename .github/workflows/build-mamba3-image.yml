@@ -6,6 +6,11 @@ on:
     paths:
       - 'docker/Dockerfile'
       - '.github/workflows/build-mamba3-image.yml'
+      # The Dockerfile COPYs analysis/ and prompts/ into the image, so a change
+      # to either changes the image. Without these entries a pipeline edit
+      # pushes green and the published image silently stays stale.
+      - 'analysis/**'
+      - 'prompts/**'
   workflow_dispatch:
     inputs:
       mamba_ref:
