@@ -117,10 +117,22 @@ print("mamba_ssm ", mamba_ssm.__version__)
 print("create_block Mamba3:", has_m3)
 print("T.dynamic ", n_dyn)
 
+import huggingface_hub
+hub_major = int(huggingface_hub.__version__.split(".")[0])
+print("hub       ", huggingface_hub.__version__)
+
 assert torch.__version__.startswith("2.11.0+cu128"), "WRONG TORCH: " + torch.__version__
 assert tilelang.__version__ == "0.1.8", "WRONG TILELANG"
 assert has_m3, "create_block CANNOT BUILD Mamba3 -- this is PyPI, not git main"
 assert n_dyn == 4, "T.dynamic MISSING -- the recompile storm will return"
+# transformers requires huggingface-hub<1.0, and mamba_ssm imports transformers,
+# so a 1.x hub silently breaks the entire stack: gpu_probe reports
+# "mamba_ssm: MISSING (ImportError)" with nothing pointing at the cause.
+# Cost real pod time on 2026-08-03 after a `pip install hf` pulled 1.26.0.
+assert hub_major == 0, (
+    "huggingface_hub %s breaks transformers (needs <1.0) and therefore "
+    "mamba_ssm. Do not `pip install hf` in this image."
+    % huggingface_hub.__version__)
 print("IMAGE GOOD")
 PYEOF
 

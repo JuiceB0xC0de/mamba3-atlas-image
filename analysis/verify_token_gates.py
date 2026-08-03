@@ -28,11 +28,35 @@ import sys
 
 import numpy as np
 
-# Declared before any data is loaded. Do not tune these to make a run pass.
-RTOL = 2.0e-3     # ~4x float16 relative resolution, allowing for mean accumulation
-ATOL = 1.0e-6     # guards genuine zeros (absent roles, exact-zero gates)
+# Declared before any data is loaded. Do not tune this to make a run pass.
+#
+# The tolerance is expressed in float16 UNITS IN THE LAST PLACE, not as a
+# relative fraction, because the thing being compared is a float64
+# reconstruction against a value that was stored in float16. One ULP is the
+# smallest difference float16 can represent at a given magnitude; agreement
+# closer than that is not merely good, it is the best the format allows.
+#
+# A plain rtol/atol pair is the wrong instrument here and was the first
+# version's mistake: relative error is meaningless as the reference approaches
+# zero, so near-zero cells report enormous relative error while being off by a
+# fraction of a representable step. Experiment 0a already established that for
+# this exact data (fp16 subnormal analysis, 2026-08-03) and the check should
+# have been written with it in mind.
+#
+# Budget: 1 ULP of float16 storage rounding, plus headroom for the capture
+# accumulating its mean in float32 on device while this rebuild accumulates in
+# float64. The float32 term is ~sqrt(n)*eps32*|x| ~ 1e-6 relative for the
+# longest interior runs, three orders below one float16 ULP (~9.8e-4 relative),
+# so it is absorbed rather than modelled.
+ULP_TOL = 2.0
 
 ROLES = ("bos", "interior", "final")
+
+
+def fp16_ulp(x):
+    """Spacing of float16 at |x|. At x == 0 this is the smallest subnormal."""
+    return np.spacing(np.abs(np.asarray(x, dtype=np.float64))
+                      .astype(np.float16)).astype(np.float64)
 
 
 def rebuild_roles(tok, lens, n_blocks, rows):
@@ -79,7 +103,8 @@ def main():
     print(f"token gates  {args.token_gates}")
     print(f"emitted fields {emitted}")
     print(f"checking       {fields}")
-    print(f"declared tolerance  rtol={RTOL:g}  atol={ATOL:g}")
+    print(f"declared tolerance  {ULP_TOL:g} float16 ULP "
+          f"(the smallest difference the storage format can represent)")
 
     probe = tg[f"token|{fields[0]}"]
     T, L, H = probe.shape
@@ -111,8 +136,8 @@ def main():
 
     # --- the reconstruction -------------------------------------------------
     failed = []
-    print(f"\n{'field':>10} {'role':>10} {'max abs err':>13} {'max rel err':>13} "
-          f"{'verdict':>9}")
+    print(f"\n{'field':>10} {'role':>10} {'max abs err':>12} {'max ULP':>9} "
+          f"{'p99.9 ULP':>10} {'over budget':>12} {'verdict':>8}")
     for f in fields:
         key = f"token|{f}"
         if key not in tg:
@@ -132,14 +157,25 @@ def main():
                 keep = counts[:, 1] > 0        # absent interior is 0 on both sides
                 a, b = a[keep], b[keep]
             aerr = np.abs(a - b)
-            rerr = aerr / np.maximum(np.abs(b), 1e-12)
-            close = np.allclose(a, b, rtol=RTOL, atol=ATOL)
-            print(f"{f:>10} {rname:>10} {aerr.max():>13.3e} {rerr.max():>13.3e} "
-                  f"{'PASS' if close else 'FAIL':>9}")
+            ulp = np.maximum(fp16_ulp(b), np.finfo(np.float16).smallest_subnormal)
+            err_ulp = aerr / ulp
+            over = err_ulp > ULP_TOL
+            close = not over.any()
+            print(f"{f:>10} {rname:>10} {aerr.max():>12.3e} {err_ulp.max():>9.2f} "
+                  f"{np.percentile(err_ulp, 99.9):>10.2f} {int(over.sum()):>12} "
+                  f"{'PASS' if close else 'FAIL':>8}")
             if not close:
-                bad = np.unravel_index(np.argmax(aerr), a.shape)
-                failed.append(f"{f}/{rname}: worst cell {bad} "
-                              f"rebuilt={a[bad]:.6g} capture={b[bad]:.6g}")
+                # report the cell that ACTUALLY fails the budget, not the one
+                # with the largest absolute error -- those are different cells
+                # whenever the reference spans magnitudes, and reporting the
+                # wrong one is how a real defect gets argued away
+                bad = np.unravel_index(np.argmax(err_ulp), a.shape)
+                failed.append(
+                    f"{f}/{rname}: worst cell {tuple(int(x) for x in bad)} "
+                    f"rebuilt={a[bad]:.8g} capture={b[bad]:.8g} "
+                    f"diff={aerr[bad]:.3e} = {err_ulp[bad]:.2f} float16 ULP "
+                    f"(budget {ULP_TOL})  [{int(over.sum())} of {over.size} "
+                    f"cells over budget]")
 
     print()
     if failed:

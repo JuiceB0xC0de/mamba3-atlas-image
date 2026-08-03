@@ -13,17 +13,73 @@ unbounded, pip resolves 0.1.12, and you get either an `AttributeError` on
 
 ---
 
-## 0. Build the token contract (free, do it before renting)
+## 0. Preflight — run this first, it replaces the steps below it
+
+    source /opt/mamba3/analysis/pod_preflight.sh
+
+Source it, do not execute it: it exports `HF_TOKEN` into your shell, and that
+does not survive into a new one. It is idempotent. It checks the env pins,
+fetches the matched token-contract pair, caches both checkpoint arms, and then
+prints the probe and capture commands with everything wired.
+
+Every check in it exists because it cost pod time on 2026-08-03.
+
+### DO NOT rebuild the token contract
+
+The instruction that used to live here —
 
     python analysis/token_contract.py --bos --out token_contract.npz
 
-`--bos` is required: the reference matches the kernel only with BOS prepended.
+— is **stale and harmful**. `token_contract.py` is non-deterministic: at least
+three artifacts exist from the same script and the same prompts.
+
+| artifact_sha256 | where | used by |
+|---|---|---|
+| `8893c3aa...` | public repo `contracts/token_contract.npz` | the 187M captures |
+| `42568fe5...` | private repo `mamba3/stage-b/token-contract/` | mimo-1.5b, and the 0b run |
+| `08e679e3...` | described by the public `contracts/` manifest | nothing current |
+
+The public `contracts/` folder pairs a manifest describing `08e679e3` with an
+npz that hashes to `8893c3aa`. They do not describe each other and the probe
+rejects the pair outright. **Use the private repo's pair**, which is internally
+consistent — the preflight script does this for you.
+
+Note that `08e679e3` appears as the old manifest's `artifact_sha256` and as the
+new manifest's `content_sha256`, which indicates the field was renamed and a
+container hash added. If so the token *content* is reproducible and only the
+npz packaging varies. Not yet verified; do not lean on it.
+
+Schema v3 also requires the sibling `.manifest.json`. Fetching only the `.npz`
+fails with `no manifest at ...`.
+
+### DO NOT `pip install hf`
+
+It pulls `huggingface_hub` 1.x. `transformers` requires `<1.0`, and `mamba_ssm`
+imports `transformers`, so the whole stack stops importing and the probe reports
+`mamba_ssm: MISSING (ImportError)` with nothing pointing at the real cause.
+Recover with `pip install --no-deps 'huggingface_hub==0.36.2'`.
+Use `huggingface-cli` for downloads and uploads on the pinned stack.
 
 ---
 
 ## 1. Probe suite — first thing on the pod
 
-    python analysis/gpu_probe.py --all --model mimo-187m
+The preflight prints this with the paths filled in. The bare form below is
+**not runnable**; four arguments are mandatory and it will STOP at `config`
+without them:
+
+* `--hf-repo` — mandatory on any real CUDA run. Pod storage is ephemeral, so
+  the probe refuses to start unless evidence can leave the machine.
+* `--token-contract` — required by `--all`; G4–G6 are defined by the validated
+  contract, not by an invented uniform sequence length.
+* `--g2-revision-siso` / `--g2-revision-mimo` — `G2_MODELS` is hardcoded to
+  `siso-187m,mimo-187m`, so g2 needs **both** arms cached and pinned even when
+  capturing only one.
+* `--layers` — g5 measures the hook surface on this list and the capture
+  refuses if the two differ. Probe and capture must agree.
+
+The probe resolves checkpoints with `local_files_only=True` deliberately, so it
+will not download for you. Cache both arms first (the preflight does).
 
 Seven gates, cheapest first, halts on STOP.
 
